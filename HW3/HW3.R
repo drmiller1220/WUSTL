@@ -1,5 +1,8 @@
 setwd("C:\\Users\\drmiller1220\\Documents\\GitHub\\WUSTL\\HW3")
 
+library(e1071)
+library(glmnet)
+
 nyt_dtm <- read.csv("unigram_dm.csv", header=TRUE)
 nyt_dtm_md <- subset(nyt_dtm, select = c(Story.Title, Story.Desk))
 nyt_dtm <- subset(nyt_dtm, select = -c(Story.Title, Story.Desk))
@@ -8,13 +11,6 @@ nyt_dtm <- subset(nyt_dtm, select = -c(Story.Title, Story.Desk))
 nyt_norm<- nyt_dtm
 for(z in 1:nrow(nyt_norm)){
   nyt_norm[z,]<- nyt_norm[z,]/sum(nyt_norm[z,])
-}
-
-
-
-key_words<- matrix(NA, nrow=n.clust, ncol=10)
-for(z in 1:n.clust){
-  key_words[z,]<- colnames(nyt_dtm)[order(k_cluster$center[z,], decreasing=T)[1:10]]
 }
 
 ###########
@@ -42,10 +38,13 @@ for(i in 1:(dim(nyt_dtm)[1]-1)){
   k_cluster<- kmeans(nyt_norm, centers = i)
   obj_func_value <- obj_func(nyt_norm, k_cluster)
   obj_func_values <- append(obj_func_values, obj_func_value)
+  print(i)
 }
 
 plot(y=obj_func_values, x=1:length(obj_func_values), ylab="Objective Function Value", xlab="Number of Clusters",
      main="Objective Function Value for Varying Numbers of Clusters")
+
+## see saved JPEG for plot
 
 ### apply k-means with 6 clusters, set seed to replicate
 
@@ -119,3 +118,85 @@ pairwise.t.test(nyt_emo$Positivity, nyt_emo$Desk)
 # performing pairwise t-tests, we see that the only distinguishable differences are that the
 # business desk, the national desk, and the arts and culture desk are all significantly more
 # positive than the foreign desk
+
+###################################################################################
+### Part 3
+
+# subsetting on business/financial and national articles
+
+selected_stories_nums <- as.numeric(row.names(nyt_dtm_md[which(nyt_dtm_md$Story.Desk=="Business/Financial Desk" |
+                                     nyt_dtm_md$Story.Desk=="National Desk"),]))
+selected_stories <- nyt_dtm[selected_stories_nums,]
+
+###
+
+# I spent a long time trying to figure out how to even start going about coding up the naive
+# Bayes, and never got far... so I am weak and gave up... particularly because everyone else who
+# finished this homework has been unable to figure it out, so that gave me close to zero hope
+# of achieving it myself.... :(
+
+# naive_bayes <- function(dtm, categories, alpha, lambda, train_frac){
+#   to_train <- sample(1:dim(dtm)[1], train_frac, replace = FALSE)
+#   training_data <- dtm[, to_train]
+#   training_categories <- categories[, to_train]
+#   
+# }
+
+###
+# using naive Bayes function
+
+desks <- nyt_dtm_md[selected_stories_nums,]$Story.Desk
+desks <- as.factor(desks)
+desks <- droplevels(desks)
+
+nb_predictions <- NULL
+for(i in 1:length(desks)){
+  out<- naiveBayes(desks[-i] ~., selected_stories[-i,])
+  predicts<- predict(out, as.data.frame(selected_stories[i,]))
+  nb_predictions <- append(as.character(predicts), nb_predictions)
+}
+
+nb_acc <- sum(nb_predictions == desks)/length(desks) #poor performance of 51%
+
+###
+
+story_sample <- sample(as.numeric(row.names(selected_stories)), dim(selected_stories)[1]/2, replace = FALSE)
+
+y.train<- nyt_dtm_md[story_sample, 2]
+x.train<- as.matrix(nyt_dtm[story_sample,])
+
+y.valid<- nyt_dtm_md[story_sample, 2]
+x.valid<- as.matrix(nyt_dtm[story_sample,])
+
+y.train <- droplevels(y.train)
+y.valid <- droplevels(y.valid)
+
+y.valid_num <- ifelse(y.valid == "National Desk", 1, 0)
+
+### Code from lecture
+
+##cv.glmnet uses a ``cross validation" method to determine a key parameter in LASSO, I strongly recommend using it
+##alpha = 1 is the LASSO
+##alpha = 0 is Ridge
+
+### Compare to LASSO
+
+train.model <- cv.glmnet(x = x.train, y = y.train, alpha = 1, nfolds=10, family="binomial", type.measure="mse")
+
+predict.new<- predict(train.model, newx = x.valid, s = train.model$lambda.min)
+
+predict.probs<- 1/(1 + exp(-predict.new))
+final.pred<- ifelse(predict.probs>0.5, 1, 0)
+lasso_acc <- sum(final.pred == y.valid_num)/length(y.valid_num) # 98% accuracy
+
+### Compare to Ridge
+
+train.model <- cv.glmnet(x = x.train, y = y.train, alpha = 0, nfolds=10, family="binomial", type.measure="mse")
+
+predict.new<- predict(train.model, newx = x.valid, s = train.model$lambda.min)
+
+predixct.probs<- 1/(1 + exp(-predict.new))
+final.pred<- ifelse(predict.probs>0.5, 1, 0)
+ridge_acc <- sum(final.pred == y.valid_num)/length(y.valid_num) # also 98% accuracy
+
+### both LASSO and ridge outperform naive Bayes
